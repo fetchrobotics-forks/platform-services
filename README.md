@@ -1,7 +1,7 @@
 # platform-services
 A public PoC with functioning services using a simple Istio Mesh running on K8s
 
-Version : <repo-version>0.9.0-master-aaaagqrfhew</repo-version>
+Version : <repo-version>0.9.0-main-aaaagsjoxpo</repo-version>
 
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://github.com/leaf-ai/platform-services/blob/master/LICENSE) [![Go Report Card](https://goreportcard.com/badge/leaf-ai/platform-services)](https://goreportcard.com/report/leaf-ai/platform-services)
 
