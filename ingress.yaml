@@ -47,24 +47,25 @@ spec:
     matchLabels:
       istio: ingressgateway
   jwtRules:
-    - issuer: "https://cognizant-ai.auth0.com/"
-      jwksUri: "https://cognizant-ai.auth0.com/.well-known/jwks.json"
+    - issuer: "https://fetch-sas-platform-demo.us.auth0.com/"
+      jwksUri: "https://fetch-sas-platform-demo.us.auth0.com/.well-known/jwks.json"
       audiences:
-        - "http://api.cognizant-ai.dev/experimentsrv"
+        - "http://api.karlmutch.com/"
 ---
 apiVersion: security.istio.io/v1beta1
 kind: AuthorizationPolicy
 metadata:
   name: require-jwt
+  namespace: istio-system
 spec:
   selector:
     matchLabels:
-      app: experiment
+      app: ingressgateway
   action: ALLOW
   rules:
   - from:
     - source:
-       requestPrincipals: ["https://cognizant-ai.auth0.com//auth0|5dd5df076288170d281d4a09"]
+       requestPrincipals: ["https://fetch-sas-platform-demo.us.auth0.com/auth0|61719523273ffd0041f8efc3"]
 ---
 apiVersion: "security.istio.io/v1beta1"
 kind: "PeerAuthentication"
@@ -80,7 +81,7 @@ metadata:
   name: auth0-egress
 spec:
   hosts:
-  - "cognizant-ai.auth0.com"
+  - "fetch-sas-platform-demo.us.auth0.com"
   ports:
   - number: 443
     name: https

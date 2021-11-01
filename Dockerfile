@@ -1,19 +1,19 @@
 # Docker multi stage build formatted file.  This is used to build then prepare
 # containers for the services that this repository uses
 #
-FROM golang:1.16.3
+FROM golang:1.17.2
 
 MAINTAINER karlmutch@gmail.com
 
-LABEL vendor="Cognizant Technologies" \
-      dev.cognizant-ai.version=0.0.0 \
-      dev.cognizant-ai.module=platform-services
+LABEL vendor="The platform-services authors" \
+      dev.version=0.0.0 \
+      dev.module=platform-services
 
 ENV LANG C.UTF-8
 
 RUN apt-get -y update
 
-RUN apt-get -y install git software-properties-common wget openssl ssh curl jq apt-utils unzip python-pip && \
+RUN apt-get -y install git software-properties-common wget openssl ssh curl jq apt-utils unzip python3-pip && \
     apt-get clean && \
     apt-get autoremove && \
     pip install awscli --upgrade
@@ -44,6 +44,6 @@ WORKDIR /home/${USER}
 
 ENV GOPATH=/project
 VOLUME /project
-WORKDIR /project/src/github.com/leaf-ai/platform-services
+WORKDIR /project/src/github.com/fetchrobotics-forks/platform-services
 
 CMD /bin/bash -C ./all-build.sh

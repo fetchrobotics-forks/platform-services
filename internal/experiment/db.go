@@ -37,30 +37,35 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/jmoiron/sqlx"
-	"github.com/lib/pq"
+	"github.com/jackc/pgx/v4/pgxpool"
+
+	"github.com/georgysavva/scany/pgxscan"
+
 	"go.opencensus.io/trace"
 
 	sq "github.com/Masterminds/squirrel"
 
-	grpc "github.com/leaf-ai/platform-services/internal/gen/experimentsrv"
+	grpc "github.com/fetchcore-forks/platform-services/internal/gen/experimentsrv"
 
-	"github.com/golang/protobuf/proto"
-	"github.com/golang/protobuf/ptypes"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/go-stack/stack"
 	"github.com/karlmutch/errors"
 )
 
-const ExpectedDBVersion int64 = 1
+const (
+	DefaultPostgresPort       = 5432
+	ExpectedDBVersion   int64 = 1
+)
 
 var (
 	databaseHostPort    = flag.String("dbaddr", defaultDBHostPort(), "Host:Port pair for the database server")
 	databaseUser        = flag.String("dbuser", defaultDBUser(), "User name for accessing the database")
 	databaseName        = flag.String("dbname", defaultDBName(), "The 'Experiment' database name")
 	databaseOptions     = flag.String("dboptions", "", "Postgres options for inclusion in the 'Experiment' DSN, for example -dboptions=options=\"-c statement_timeout=2min\"")
-	databaseMaxConn     = flag.Int("dbmaxconn", 72, "Sets a limit for open connections the master will use to postgres")
-	databaseMaxIdleConn = flag.Int("dbmaxidleconn", 8, "Sets a limit for open and idle connections the master will use to postgres")
+	databaseMaxConn     = flag.Int("dbmaxconn", 8, "Sets a limit for open connections the master will use to postgres")
+	databaseMaxIdleConn = flag.Int("dbmaxidleconn", 1, "Sets a limit for open and idle connections that will used for the postgres connection pool")
 
 	// dbDownErr is used within the db layer to record if the DB is down.  A simple circuit breaker is
 	// used with the DB gofunc handler loop to retry connections on a regular basis.  The DB methods
@@ -70,7 +75,7 @@ var (
 		err: errors.New("DB initialization not yet started"),
 	}
 
-	dBase *sqlx.DB
+	dBase *pgxpool.Pool
 )
 
 type DBErr struct {
@@ -142,19 +147,19 @@ type ExperimentData struct {
 	Description string    `db:"description"`
 }
 
-func dbHasCorrectVersion(expect int64) (err error, ok bool, actual int64) {
-	err = dBase.QueryRow("SELECT version FROM upgrades ORDER BY timestamp DESC LIMIT 1").Scan(&actual)
+func dbHasCorrectVersion(ctx context.Context, expect int64) (err error, ok bool, actual int64) {
+	err = dBase.QueryRow(ctx, "SELECT version FROM upgrades ORDER BY timestamp DESC LIMIT 1").Scan(&actual)
 
 	return err, (expect == actual), actual
 }
 
 // CloseDB is used to close any existing database connections to the Experiment DB
 //
-func CloseDB() error {
+func CloseDB(ctx context.Context) (err error) {
 
 	dbDownErr.set(errors.New("database has been closed intentionally").With("stack", stack.Trace().TrimRuntime()))
 
-	return dBase.Close()
+	return nil
 }
 
 // getPassFromPGPass matches the very first line that can be matched from the postgres password file as documented
@@ -196,21 +201,37 @@ func getPassFromPGPass(passFile string, host string, port string, db string, use
 			continue
 		}
 
-		if (tokens[0] != "*" && tokens[0] != host) ||
-			(tokens[1] != "*" && tokens[1] != port) ||
-			(tokens[2] != "*" && tokens[2] != db) ||
-			(tokens[3] != "*" && tokens[3] != user) {
+		if tokens[0] != "*" && tokens[0] != host {
 			continue
 		}
-		return tokens[4], nil
+
+		if len(tokens[1]) == 0 {
+			tokens[1] = strconv.Itoa(DefaultPostgresPort)
+		} else {
+			if tokens[1] != "*" && (tokens[1] != port) {
+				continue
+			}
+		}
+
+		if tokens[2] != "*" && tokens[2] != db {
+			continue
+		}
+
+		if tokens[3] != "*" && tokens[3] != user {
+			continue
+		}
+
+		if len(tokens[4]) != 0 {
+			return tokens[4], nil
+		}
 	}
 
 	if errGo = scanner.Err(); errGo != nil {
 		return pass, errors.Wrap(errGo, "pass file parsing failed").With("passfile", passFile).With("stack", stack.Trace().TrimRuntime())
 	}
 
-	// Password was not found inside the pgpas file
-	return "", nil
+	// Password was not found inside the pgpass file
+	return "", errors.New("password not found").With("passFile", passFile).With("stack", stack.Trace().TrimRuntime())
 }
 
 type DBErrorMsg struct {
@@ -227,14 +248,6 @@ func StartDB(ctx context.Context) (msgC chan string, errorC chan *DBErrorMsg, er
 	msgC = make(chan string)
 	errorC = make(chan *DBErrorMsg)
 
-	// The following function does not create a Live database connection.  This is done later
-	// during the normal server life cycle
-	//
-	if err := initDB(*databaseHostPort, *databaseUser); err != nil {
-		dbDownErr.set(err)
-		return msgC, errorC, err
-	}
-
 	// On the first time the master is started the DB is left in a down state and is initialized
 	// during the normal life cycle of the server.
 	//
@@ -245,7 +258,35 @@ func StartDB(ctx context.Context) (msgC chan string, errorC chan *DBErrorMsg, er
 	//
 	go func() {
 
-		defer CloseDB()
+		for {
+			select {
+			case <-time.After(15 * time.Second):
+				db, dbErr := initDB(*databaseHostPort, *databaseUser)
+				if dbErr != nil {
+					dbDownErr.set(dbErr)
+
+					err := &DBErrorMsg{
+						Fatal: false,
+						Err:   dbErr,
+					}
+					select {
+					case errorC <- err:
+					default:
+					}
+					continue
+				}
+				dBase = db
+				break
+			case <-ctx.Done():
+				select {
+				case msgC <- "database monitor stopped":
+				default:
+				}
+				return
+			}
+		}
+
+		defer CloseDB(context.Background())
 
 		defer close(msgC)
 		defer close(errorC)
@@ -257,13 +298,16 @@ func StartDB(ctx context.Context) (msgC chan string, errorC chan *DBErrorMsg, er
 		//
 		dbCheckTimer := time.Duration(time.Microsecond)
 
-		lastCncts := 0
-
 		for {
 			select {
 			case <-time.After(dbCheckTimer):
 				dbRecovery := dbDownErr.get() != nil
-				if errGo := dBase.Ping(); errGo != nil {
+
+				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				errGo := dBase.Ping(ctx)
+				cancel()
+
+				if errGo != nil {
 
 					dbDownErr.set(errors.Wrap(errGo))
 
@@ -288,7 +332,7 @@ func StartDB(ctx context.Context) (msgC chan string, errorC chan *DBErrorMsg, er
 					default:
 					}
 					// Check that the Database has the expected version
-					err, ok, version := dbHasCorrectVersion(ExpectedDBVersion)
+					err, ok, version := dbHasCorrectVersion(context.Background(), ExpectedDBVersion)
 					if err == nil && !ok {
 						msg := fmt.Sprint("db has the wrong version ", ExpectedDBVersion, " expected got version ", version, " instead")
 						errMsg := &DBErrorMsg{
@@ -317,15 +361,6 @@ func StartDB(ctx context.Context) (msgC chan string, errorC chan *DBErrorMsg, er
 					}
 				}
 
-				if lastCncts != dBase.Stats().OpenConnections {
-					lastCncts = dBase.Stats().OpenConnections
-					msg := fmt.Sprint("database has ", lastCncts, " connections ",
-						" ", *databaseHostPort, " name ", *databaseName, " dbConnectionCount ", lastCncts)
-					select {
-					case msgC <- msg:
-					default:
-					}
-				}
 			case <-ctx.Done():
 				select {
 				case msgC <- "database monitor stopped":
@@ -352,7 +387,7 @@ func GetDBStatus() (err errors.Error) {
 // initDB will setup the database configuration but does not actually create a live connection
 // or validate the parameters supplied to it.
 //
-func initDB(url string, user string) (err errors.Error) {
+func initDB(url string, user string) (db *pgxpool.Pool, err errors.Error) {
 
 	pgPassFile := os.Getenv("PGPASSFILE")
 	if len(pgPassFile) == 0 {
@@ -366,12 +401,15 @@ func initDB(url string, user string) (err errors.Error) {
 		// shell issues in the salt startup try a hard coded but
 		// well known location
 		if _, errGo := os.Stat(pgPassFile); os.IsNotExist(errGo) {
-			pgPassFile = "/opt/cognizant-ai/.pgpass"
+			pgPassFile = "/home/app/.pgpass"
 		}
 	}
 
 	hostPort := strings.Split(url, ":")
 	password, err := getPassFromPGPass(pgPassFile, hostPort[0], hostPort[1], *databaseName, user)
+	if err != nil {
+		return nil, err
+	}
 
 	dbOptions := ""
 
@@ -383,41 +421,19 @@ func initDB(url string, user string) (err errors.Error) {
 	datasetName = strings.Replace(datasetName, ":@", "@", 1)
 	safeDatasetName := fmt.Sprintf("postgres://%s:********@%s/%s?sslmode=disable%s", user, url, *databaseName, dbOptions)
 
-	db, errGo := sql.Open("postgres", datasetName)
-	if errGo != nil {
-		return errors.Wrap(errGo).With("dbConnectString", safeDatasetName).With("stack", stack.Trace().TrimRuntime())
+	if len(password) == 0 {
+		return nil, errors.New("postgres password empty").With("pgPassFile", pgPassFile, "dbConnectString", safeDatasetName).With("stack", stack.Trace().TrimRuntime())
 	}
 
-	db.SetMaxOpenConns(*databaseMaxConn)
-	db.SetMaxIdleConns(*databaseMaxIdleConn)
+	//db.SetMaxOpenConns(*databaseMaxConn)
+	//db.SetMaxIdleConns(*databaseMaxIdleConn)
 
-	dBase = sqlx.NewDb(db, "postgres")
-	// The follow functor takes a gRPC/Thrift style name and converts it to a DB column style name
-	//
-	// This method is temporary until the golang sql treats arrays as first class citizens.
-	// When that happens we will be able to remove all of our local marshalling code and
-	// structures within this module
-	dBase.MapperFunc(func(input string) string {
+	db, errGo := pgxpool.Connect(context.Background(), datasetName)
+	if errGo != nil {
+		return nil, errors.Wrap(errGo).With("dbConnectString", safeDatasetName).With("stack", stack.Trace().TrimRuntime())
+	}
 
-		var output bytes.Buffer
-		wasUpper := false
-		for _, aRune := range input {
-			wasUpper = unicode.IsUpper(aRune)
-			break
-		}
-
-		for i, aRune := range input {
-			if i != 0 && !wasUpper && unicode.IsUpper(aRune) {
-				output.WriteString("_")
-			}
-			output.WriteRune(unicode.ToLower(aRune))
-
-			wasUpper = unicode.IsUpper(aRune)
-		}
-		return output.String()
-	})
-
-	return nil
+	return db, nil
 }
 
 // showAllTrace is a utility function useful for when the database comes up to dump information
@@ -429,12 +445,14 @@ func DBShowAllTrace() (output []string, err errors.Error) {
 
 	output = []string{}
 
-	rows, errGo := dBase.Queryx("show all")
+	rows, errGo := dBase.Query(context.Background(), "show all")
 
 	if errGo != nil {
 		return nil, errors.Wrap(errGo).With("stack", stack.Trace().TrimRuntime())
 	}
 	defer rows.Close()
+
+	rs := pgxscan.NewRowScanner(rows)
 
 	type DBSetting struct {
 		Name        string
@@ -444,12 +462,16 @@ func DBShowAllTrace() (output []string, err errors.Error) {
 
 	for rows.Next() {
 		aRow := &DBSetting{}
-		if errGo = rows.StructScan(aRow); errGo != nil {
+		if errGo = rs.Scan(aRow); errGo != nil {
 			return nil, errors.Wrap(errGo).With("stack", stack.Trace().TrimRuntime())
 		}
 		msg := fmt.Sprintf("%s='%s' %s", aRow.Name, aRow.Setting, aRow.Description)
 		output = append(output, fmt.Sprint("DB Setting ", msg))
 	}
+	if errGo := rows.Err(); errGo != nil {
+		return nil, errors.Wrap(errGo).With("stack", stack.Trace().TrimRuntime())
+	}
+
 	return output, nil
 }
 
@@ -471,58 +493,58 @@ func CheckIfFatal(inErr error) (err error) {
 
 			os.Exit(-5)
 		}
+		/**
+				if driverErr, ok := inErr.(*pq.Error); ok {
 
-		if driverErr, ok := inErr.(*pq.Error); ok {
+					classNumber, _ := strconv.Atoi(string(driverErr.Code.Class()))
 
-			classNumber, _ := strconv.Atoi(string(driverErr.Code.Class()))
+					// Look for classes of errors that can be returned to the caller which are not Fatal.
+					//
+					// For further information please read http://www.postgresql.org/docs/9.5/static/errcodes-appendix.html
+					//
+					switch classNumber {
+					case 0:
+						// Class 00 — Successful Completion
+						// 00000 successful_completion
+						return nil
+					case 8:
+						// Class 08 — Connection Exception
+						//
+						// 08000 connection_exception
+						// 08003 connection_does_not_exist
+						// 08006 connection_failure
+						// 08001 sqlclient_unable_to_establish_sqlconnection
+						// 08004 sqlserver_rejected_establishment_of_sqlconnection
+						// 08007 transaction_resolution_unknown
+						// 08P01 protocol_violation
+						return inErr
+					case 23:
+						// Class 23 — Integrity Constraint Violation
+						//
+						// 23000 integrity_constraint_violation
+						// 23001 restrict_violation
+						// 23502 not_null_violation
+						// 23503 foreign_key_violation
+						// 23505 unique_violation
+						// 23514 check_violation
+						// 23P01 exclusion_violation
+						return inErr
+					}
 
-			// Look for classes of errors that can be returned to the caller which are not Fatal.
-			//
-			// For further information please read http://www.postgresql.org/docs/9.5/static/errcodes-appendix.html
-			//
-			switch classNumber {
-			case 0:
-				// Class 00 — Successful Completion
-				// 00000 successful_completion
-				return nil
-			case 8:
-				// Class 08 — Connection Exception
-				//
-				// 08000 connection_exception
-				// 08003 connection_does_not_exist
-				// 08006 connection_failure
-				// 08001 sqlclient_unable_to_establish_sqlconnection
-				// 08004 sqlserver_rejected_establishment_of_sqlconnection
-				// 08007 transaction_resolution_unknown
-				// 08P01 protocol_violation
-				return inErr
-			case 23:
-				// Class 23 — Integrity Constraint Violation
-				//
-				// 23000 integrity_constraint_violation
-				// 23001 restrict_violation
-				// 23502 not_null_violation
-				// 23503 foreign_key_violation
-				// 23505 unique_violation
-				// 23514 check_violation
-				// 23P01 exclusion_violation
-				return inErr
-			}
+					// Now the error infomation is accessible for any other classes of errors
+					// check those
+					switch driverErr.Code.Name() {
+					case "successful_completion":
+						return nil
+					default:
+						log.Print(fmt.Sprint("Postgres driver fatal error ", driverErr.Error()))
+						return inErr.(*pq.Error)
 
-			// Now the error infomation is accessible for any other classes of errors
-			// check those
-			switch driverErr.Code.Name() {
-			case "successful_completion":
-				return nil
-			default:
-				log.Print(fmt.Sprint("Postgres driver fatal error ", driverErr.Error()))
-				return inErr.(*pq.Error)
-
-				// os.Exit((classNumber + 10) * -1)
-			}
-		}
+						// os.Exit((classNumber + 10) * -1)
+					}
+				}
+		**/
 	}
-
 	return inErr
 }
 
@@ -579,16 +601,12 @@ func SelectExperiment(ctx context.Context, rowId uint64, uid string) (result *gr
 	result = &grpc.Experiment{}
 	createTime := time.Now()
 
-	row := dBase.QueryRow(sql, args...)
+	row := dBase.QueryRow(context.Background(), sql, args...)
 	errGo = row.Scan(&result.Uid, &result.Name, &result.Description, &createTime)
 	if CheckIfFatal(errGo) != nil {
 		return nil, errors.Wrap(errGo).With("stack", stack.Trace().TrimRuntime()).With("rowId", rowId).With("uid", uid)
 	}
-	tstamp, errGo := ptypes.TimestampProto(createTime)
-	if errGo != nil {
-		return nil, errors.Wrap(errGo, "could not parse timestamp from DB").With("stack", stack.Trace().TrimRuntime()).With("rowId", rowId).With("uid", uid)
-	}
-	result.Created = tstamp
+	result.Created = timestamppb.New(createTime)
 
 	return result, nil
 }
@@ -645,32 +663,30 @@ func SelectExperimentWide(ctx context.Context, uid string) (result *grpc.Experim
 		return nil, errors.New("selecting an experiment requires the experiment unique id to be specified").With("stack", stack.Trace().TrimRuntime())
 	}
 
-	rows, errGo := dBase.Queryx(sql, uid)
+	rows, errGo := dBase.Query(context.Background(), sql, uid)
 	if CheckIfFatal(errGo) != nil {
 		return nil, errors.Wrap(errGo).With("stack", stack.Trace().TrimRuntime()).With("uid", uid)
 	}
 	defer rows.Close()
 	rowCount := 0
 
+	rs := pgxscan.NewRowScanner(rows)
+
 	// TODO If there are now rows then do a simple select for the main record to see if it exists
 
 	for rows.Next() {
 		rowCount++
 		row := experimentWide{}
-		if errGo = rows.StructScan(&row); CheckIfFatal(errGo) != nil {
+		if errGo = rs.Scan(&row); CheckIfFatal(errGo) != nil {
 			return nil, errors.Wrap(errGo).With("stack", stack.Trace().TrimRuntime()).With("uid", uid)
 		}
 		if result == nil {
-			tstamp, errGo := ptypes.TimestampProto(row.Created)
-			if errGo != nil {
-				return nil, errors.Wrap(errGo, "could not parse timestamp from DB").With("stack", stack.Trace().TrimRuntime()).With("uid", uid)
-			}
 
 			result = &grpc.Experiment{
 				Uid:          row.Uid,
 				Name:         row.Name,
 				Description:  row.Description,
-				Created:      tstamp,
+				Created:      timestamppb.New(row.Created),
 				InputLayers:  map[uint32]*grpc.InputLayer{},
 				OutputLayers: map[uint32]*grpc.OutputLayer{},
 			}
@@ -750,58 +766,45 @@ func InsertExperiment(ctx context.Context, data *grpc.Experiment) (result *grpc.
 
 	result = proto.Clone(data).(*grpc.Experiment)
 
-	tx := dBase.MustBegin()
-
-	query := sq.Insert("experiments").
-		Columns("uid", "name", "description").
-		Values(data.Uid, data.Name, data.Description).
-		Suffix("RETURNING \"created\"").
-		RunWith(dBase.DB).
-		PlaceholderFormat(sq.Dollar)
+	tx, errGo := dBase.Begin(context.Background())
+	if errGo != nil {
+		return nil, errors.Wrap(errGo).With("stack", stack.Trace().TrimRuntime()).With("uid", data.Uid)
+	}
 
 	created := time.Now()
+	errGo = tx.QueryRow(context.Background(), "insert into experiments(uid, name, description) values($1, $2, $3)", data.Uid, data.Name, data.Description).Scan(&created)
 
-	errGo := query.QueryRow().Scan(&created)
 	if CheckIfFatal(errGo) != nil {
-		tx.Rollback()
+		tx.Rollback(context.Background())
 		return nil, errors.Wrap(errGo).With("stack", stack.Trace().TrimRuntime()).With("uid", data.Uid)
 	}
 
 	for i, layer := range data.InputLayers {
-		_, errGo = sq.Insert("layers").
-			Columns("uid", "number", "name", "class", "type", "values").
-			Values(data.Uid, i, layer.Name, "Input", layer.Type.String(), arrayStrToPg(layer.Values)).
-			RunWith(dBase.DB).
-			PlaceholderFormat(sq.Dollar).Exec()
+		errGo = tx.QueryRow(context.Background(), "insert into layers(uid, number, name, class, type, values) values($1, $2, $3, $4, $5, $6)",
+			data.Uid, i, layer.Name, "Input", layer.Type.String(), arrayStrToPg(layer.Values)).Scan(&created)
 
 		if CheckIfFatal(errGo) != nil {
-			tx.Rollback()
+			tx.Rollback(context.Background())
 			return nil, errors.Wrap(errGo).With("stack", stack.Trace().TrimRuntime()).With("uid", data.Uid)
 		}
 	}
 
 	for i, layer := range data.OutputLayers {
-		_, errGo = sq.Insert("layers").
-			Columns("uid", "number", "name", "class", "type", "values").
-			Values(data.Uid, i, layer.Name, "Output", layer.Type.String(), arrayStrToPg(layer.Values)).
-			RunWith(dBase.DB).
-			PlaceholderFormat(sq.Dollar).Exec()
+		errGo = tx.QueryRow(context.Background(), "insert into layers(uid, number, name, class, type, values) values($1, $2, $3, $4, $5, $6)",
+			data.Uid, i, layer.Name, "Output", layer.Type.String(), arrayStrToPg(layer.Values)).Scan(&created)
 
 		if CheckIfFatal(errGo) != nil {
-			tx.Rollback()
+			tx.Rollback(context.Background())
 			return nil, errors.Wrap(errGo).With("stack", stack.Trace().TrimRuntime()).With("uid", data.Uid)
 		}
 	}
 
-	errGo = tx.Commit()
+	errGo = tx.Commit(context.Background())
 	if errGo != nil {
 		return nil, errors.Wrap(errGo, "database insert transaction failed").With("stack", stack.Trace().TrimRuntime()).With("uid", data.Uid)
 	}
 
-	result.Created, errGo = ptypes.TimestampProto(created)
-	if errGo != nil {
-		return nil, errors.Wrap(errGo, "timestamp from database insert could not be parsed").With("stack", stack.Trace().TrimRuntime()).With("uid", data.Uid)
-	}
+	result.Created = timestamppb.New(created)
 
 	return result, nil
 }
@@ -830,16 +833,12 @@ func DeactivateExperiment(ctx context.Context, uid string) (err errors.Error) {
 		return errors.New("a deactivate operation must have the experiment uid field set").With("stack", stack.Trace().TrimRuntime()).With("uid", uid)
 	}
 
-	result, errGo := sq.Update("experiments").
-		Set("state", "Deactivated").
-		Where(sq.Eq{"uid": uid}).
-		RunWith(dBase.DB).
-		PlaceholderFormat(sq.Dollar).
-		Exec()
+	result, errGo := dBase.Exec(context.Background(), "update experiments set state=$1 where uid=$2", "Deactivated", uid)
+
 	if CheckIfFatal(errGo) != nil {
 		return errors.Wrap(errGo).With("stack", stack.Trace().TrimRuntime()).With("uid", uid)
 	}
-	if len, _ := result.RowsAffected(); len == 0 {
+	if len := result.RowsAffected(); len == 0 {
 		return errors.New("specified experiment was not found").With("stack", stack.Trace().TrimRuntime()).With("uid", uid)
 	}
 	return nil
@@ -859,13 +858,10 @@ func SaveLog(log *Log) (err errors.Error) {
 		message = message[:127]
 	}
 
-	insert := sq.Insert("logs").
-		Columns("priority", "timestamp", "source", "msg").
-		Values(int32(log.Priority), time.Unix(0, log.Nanoseconds), log.Source, message).
-		RunWith(dBase.DB).
-		PlaceholderFormat(sq.Dollar)
+	_, errGo := dBase.Exec(context.Background(), "insert into logs(priorities, timestamp, source, msg) values($1, $2, $3, $4)",
+		int32(log.Priority), time.Unix(0, log.Nanoseconds), log.Source, message)
 
-	if _, errGo := insert.Exec(); CheckIfFatal(errGo) != nil {
+	if CheckIfFatal(errGo) != nil {
 		return errors.Wrap(errGo).With("stack", stack.Trace().TrimRuntime())
 	}
 	return nil

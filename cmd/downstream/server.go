@@ -10,13 +10,13 @@ import (
 	"github.com/go-stack/stack"
 	"github.com/karlmutch/errors"
 
-	"github.com/golang/protobuf/ptypes"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/reflection"
 
-	downstream "github.com/leaf-ai/platform-services/internal/gen/downstream"
+	downstream "github.com/fetchcore-forks/platform-services/internal/gen/downstream"
 )
 
 var (
@@ -35,7 +35,7 @@ func (*DownstreamServer) Ping(ctx context.Context, in *downstream.PingRequest) (
 	}
 
 	resp = &downstream.PingResponse{
-		Tm: ptypes.TimestampNow(),
+		Tm: timestamppb.Now(),
 	}
 
 	return resp, nil

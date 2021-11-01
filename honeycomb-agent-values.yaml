@@ -1,0 +1,22 @@
+watchers:
+  - dataset: kubernetes-logs
+    labelSelector: component=kube-controller-manager
+    namespace: kube-system
+    parser: glog
+  - dataset: kubernetes-logs
+    labelSelector: component=kube-scheduler
+    namespace: kube-system
+    parser: glog
+  - dataset: envoy-access-logs
+    containerName: envoy
+    parser: envoy
+    processors:
+    - request_shape:
+       field: request
+  - dataset: envoy-access-logs
+    containerName: istio-proxy
+    parser: envoy
+    processors:
+    - request_shape:
+        field: request
+verbosity: debug

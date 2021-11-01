@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/leaf-ai/platform-services/internal/version"
+	"github.com/fetchcore-forks/platform-services/internal/version"
 )
 
 type info struct {

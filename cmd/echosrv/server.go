@@ -14,9 +14,9 @@ import (
 	"google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/reflection"
 
-	timestamp "github.com/golang/protobuf/ptypes/timestamp"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
-	echo "github.com/leaf-ai/platform-services/internal/gen/echosrv"
+	echo "github.com/fetchcore-forks/platform-services/internal/gen/echosrv"
 )
 
 type echoServer struct {
@@ -31,7 +31,7 @@ func (*echoServer) Echo(ctx context.Context, in *echo.Request) (resp *echo.Respo
 
 	return &echo.Response{
 		Message:  in.Message,
-		DateTime: &timestamp.Timestamp{Seconds: time.Now().Unix()}}, nil
+		DateTime: &timestamppb.Timestamp{Seconds: time.Now().Unix()}}, nil
 }
 
 func (es *echoServer) Check(ctx context.Context, in *grpc_health_v1.HealthCheckRequest) (resp *grpc_health_v1.HealthCheckResponse, err error) {

@@ -1,7 +1,7 @@
 #!/bin/bash -e
 set -x
-go get github.com/karlmutch/duat
-go get github.com/karlmutch/duat/cmd/semver
+go get -d github.com/karlmutch/duat
+go get -d github.com/karlmutch/duat/cmd/semver
 version=`$GOPATH/bin/semver`
 
 set +e
@@ -20,7 +20,7 @@ if [ $? -eq 0 ]; then
             if [ "$base" == "cli-downstream" ] ; then
                 continue
             fi
-            docker tag $base:$version $account.dkr.ecr.us-west-2.amazonaws.com/platform-services/$base:$version
+            docker tag platform-services/$base:$version $account.dkr.ecr.us-west-2.amazonaws.com/platform-services/$base:$version
             docker push $account.dkr.ecr.us-west-2.amazonaws.com/platform-services/$base:$version
         done
     fi
@@ -41,7 +41,7 @@ if [ $? -eq 0 ]; then
         if [ "$base" == "cli-downstream" ] ; then
             continue
         fi
-        docker tag $base:$version localhost:32000/platform-services/$base:$version
+        docker tag platform-services/$base:$version localhost:32000/platform-services/$base:$version
         docker push localhost:32000/platform-services/$base:$version
     done
 fi

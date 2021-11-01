@@ -23,8 +23,8 @@ import (
 	"github.com/go-stack/stack"
 	"github.com/karlmutch/errors"
 
-	model "github.com/leaf-ai/platform-services/internal/experiment"
-	experiment "github.com/leaf-ai/platform-services/internal/gen/experimentsrv"
+	model "github.com/fetchcore-forks/platform-services/internal/experiment"
+	experiment "github.com/fetchcore-forks/platform-services/internal/gen/experimentsrv"
 )
 
 var (

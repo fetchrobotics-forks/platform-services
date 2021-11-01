@@ -1,7 +1,10 @@
 #!/bin/sh
 if [ -n "${PGPASSWORD}" ]; then
-    echo "${PGHOST}:${PGPORT}:${PGDATABASE}:${PGUSER}:${PGPASSWORD}" >> /root/.pgpass
-    chmod 0600 /root/.pgpass
-    export PGPASSWORDFILE="/root/.pgpass"
+    echo "${PGHOST}:${PGPORT}:${PGDATABASE}:${PGUSER}:${PGPASSWORD}" >> /home/app/.pgpass
+    chmod 0600 /home/app/.pgpass
+    export PGPASSWORDFILE="/home/app/.pgpass"
 fi
+echo "PGPASSWORD"
+echo "${PGPASSWORD}"
+cat /home/app/.pgpass
 ./experimentsrv

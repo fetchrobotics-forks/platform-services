@@ -29,13 +29,18 @@ spec:
                     destination_port: string(destination.port)
                     request_host: request.host
   meshConfig:
+    enableTracing: true
     defaultConfig:
       extraStatTags:
        - destination_port
        - request_host
       tracing:
         sampling: 100
+        max_path_tag_length: 256
         custom_tags:
+          clusterID:
+            environment:
+              name: ISTIO_META_CLUSTER_ID
           platform_poc:
             header:
               name: host

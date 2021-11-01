@@ -12,11 +12,11 @@ import (
 
 	"github.com/go-test/deep"
 
-	"github.com/golang/protobuf/proto"
+	"google.golang.org/protobuf/proto"
 
-	model "github.com/leaf-ai/platform-services/internal/experiment"
-	grpc "github.com/leaf-ai/platform-services/internal/gen/experimentsrv"
-	"github.com/leaf-ai/platform-services/internal/platform"
+	model "github.com/fetchcore-forks/platform-services/internal/experiment"
+	grpc "github.com/fetchcore-forks/platform-services/internal/gen/experimentsrv"
+	"github.com/fetchcore-forks/platform-services/internal/platform"
 
 	"github.com/go-stack/stack"
 	"github.com/karlmutch/errors"

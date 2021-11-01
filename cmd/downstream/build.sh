@@ -11,10 +11,10 @@ set -o pipefail
 
 export HASH=`git rev-parse HEAD`
 export PATH=$PATH:$GOPATH/bin
-go get -u github.com/itchio/gothub
-go get -u google.golang.org/grpc
-go get -u google.golang.org/protobuf/cmd/protoc-gen-go
-go get -u github.com/karlmutch/duat/cmd/semver
+go get -d github.com/itchio/gothub
+go get -d google.golang.org/grpc
+go get -d google.golang.org/protobuf/cmd/protoc-gen-go
+go get -d github.com/karlmutch/duat/cmd/semver
 export SEMVER=`semver`
 TAG_PARTS=$(echo $SEMVER | sed "s/-/\n-/g" | sed "s/\./\n\./g" | sed "s/+/\n+/g")
 PATCH=""
@@ -28,11 +28,11 @@ do
         PATCH+=$part
     fi
 done
-flags='-X github.com/leaf-ai/platform-services/internal/version.GitHash="$HASH" -X github.com/leaf-ai/platform-services/internal/version.SemVer="$SEMVER"'
+flags='-X github.com/fetchcore-forks/platform-services/internal/version.GitHash="$HASH" -X github.com/fetchcore-forks/platform-services/internal/version.SemVer="$SEMVER"'
 flags="$(eval echo $flags)"
 [ -e internal/gen/downstream ] || mkdir -p internal/gen/downstream
-#[ -e vendor/github.com/leaf-ai/platform-services/internal ] || mkdir -p vendor/github.com/leaf-ai/platform-services/internal
-#[ -e vendor/github.com/leaf-ai/platform-services/internal/gen ] || ln -s `pwd`/internal/gen vendor/github.com/leaf-ai/platform-services/internal/gen
+#[ -e vendor/github.com/fetchcore-forks/platform-services/internal ] || mkdir -p vendor/github.com/fetchcore-forks/platform-services/internal
+#[ -e vendor/github.com/fetchcore-forks/platform-services/internal/gen ] || ln -s `pwd`/internal/gen vendor/github.com/fetchcore-forks/platform-services/internal/gen
 protoc -Icmd/downstream -I/usr/include/google --plugin=$GOPATH/bin/protoc-gen-go --go_out=./internal/gen/downstream --go_opt=paths=source_relative --plugin=$GOPATH/bin/protoc-gen-go-grpc --go-grpc_out=./internal/gen/downstream cmd/downstream/downstream.proto --go-grpc_opt=paths=source_relative
 
 if [ "$1" == "gen" ]; then
@@ -49,8 +49,8 @@ go test -ldflags "$flags" -race -c -o cmd/downstream/bin/downstream-test cmd/dow
 if [ -z "$PATCH" ]; then
     if ! [ -z "${SEMVER}" ]; then
         if ! [ -z "${GITHUB_TOKEN}" ]; then
-            gothub-release release --user leaf-ai --repo platform-services --tag ${SEMVER} --pre-release || true
-            gothub-release upload --user leaf-ai --repo platform-services  --tag ${SEMVER} --name downstream --file cmd/downstream/bin/downstream
+            gothub-release release --user karlmutch --repo platform-services --tag ${SEMVER} --pre-release || true
+            gothub-release upload --user karlmutch --repo platform-services  --tag ${SEMVER} --name downstream --file cmd/downstream/bin/downstream
         fi
     fi
 fi

@@ -1,5 +1,5 @@
 #!/bin/bash -xe
-go get github.com/karlmutch/duat/cmd/semver
+go get -d github.com/karlmutch/duat/cmd/semver
 mkdir -p internal/gen
 
 # Code generation must be done first to allow vendoring and modules to play nice
