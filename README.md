@@ -34,7 +34,7 @@ git clone https://github.com/fetchcore-forks/platform-services
 cd platform-services
 </b></code></pre>
 
-To boostrap development you will need a copy of Go 1.17.2+ available.
+To boostrap development you will need a copy of Go 1.17.3+ available.
 
 Go installation instructions can be found at, https://golang.org/doc/install.
 
@@ -1368,6 +1368,17 @@ repeated string values = 3[json_name = "values"];
 }
 </code></pre>
 
+# Notes of using Kiali
+
+A quick a dirty means of using Kiali is shown below.
+
+```
+kubectl apply -f https://raw.githubusercontent.com/istio/istio/release-1.11/samples/addons/prometheus.yaml
+kubectl apply -f ${ISTIO_HOME}/samples/addons/kiali.yaml
+kubectl port-forward svc/kiali 20001:20001 -n istio-system &
+```
+
+Then browse to http://localhost:20001/...
 
 # Shutting down a service, or cluster
 

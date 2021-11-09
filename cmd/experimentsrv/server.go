@@ -42,7 +42,7 @@ type ExperimentServer struct {
 // email address.  The custom rule would appear as follows:
 //
 // function (user, context, callback) {
-//  context.accessToken["http://cognizant-ai.dev/user"] = user.email;
+//  context.accessToken["http://karlmutch.com/user"] = user.email;
 //  callback(null, user, context);
 // }
 //
@@ -57,7 +57,7 @@ func GetUserFromClaims(ctx context.Context) {
 			}
 
 			type CustomClaims struct {
-				Email string `json:"http://cognizant-ai.dev/user"`
+				Email string `json:"http://karlmutch.com/user"`
 				jwt.StandardClaims
 			}
 
@@ -103,6 +103,9 @@ func (eServer *ExperimentServer) MeshCheck(ctx context.Context, in *experiment.C
 
 	ctxTimeout, cancel := context.WithTimeout(ctx, time.Duration(10*time.Second))
 	defer cancel()
+
+	span := zipkin.SpanFromContext(ctx)
+	span.Tag("custom_key", "some value")
 
 	if ds := aliveDownstream(ctxTimeout, eServer.tracer, in.Live); len(ds) != 0 {
 		resp.Modules = append(resp.Modules, ds)

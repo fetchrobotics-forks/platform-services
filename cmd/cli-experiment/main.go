@@ -90,7 +90,6 @@ func main() {
 		grpc.WithPerRPCCredentials(perRPC),
 		grpc.WithTransportCredentials(cert),
 	}
-	//opts = append(opts, grpc.WithBlock())
 
 	logger.Info("", "server-addr", *serverAddr, "stack", stack.Trace().TrimRuntime())
 
